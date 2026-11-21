@@ -43,7 +43,19 @@ Blocked: `169.254.169.254` (cloud metadata), `[::1]`, `127.1`, `0x7f000001`, por
 | Stage 3 | gemini-3.5-flash-lite | joinekatra.com | OK, 6.3s (model 2.4s), 3,220 in / 259 out. "Noticed on your about page" matches the source URL. |
 | Stage 3 | gemini-3.5-flash-lite | southernpetsupplies.com.au + sender context (non-SaaS) | OK, 7.8s (fetch 5.7s, model 2.1s), 1,489 in / 220 out. Verified quote "We Stock 4,000+ Products"; line 3 used sender context. Line 2 generic ("keeps your team busy"), which no check catches. Only homepage read. |
 
+## Deployed site (signalopener.vercel.app), 21 Nov 2026
+| Test | Result |
+|---|---|
+| Bad URL ("not a url") | INVALID_URL, 0.3s |
+| Cloud metadata address (169.254.169.254) | BLOCKED_HOST |
+| g2.com (real bot-protected site) | BLOCKED_BY_SITE, 0.4s, no model call |
+| excalidraw.com (real JavaScript-only site) | js_rendered, 0.4s, no model call |
+| joinekatra.com | OK: homepage + /about-us read, 3,288 in / 253 out / 0 thinking tokens, 4.5s; all 7 checks passed |
+| Same site again as https://www.joinekatra.com/ | Served from cache, 0.3s, no model call |
+| 6 requests in under a minute from one IP | 6th refused: "Too many requests in a short time" |
+
+Weak spot seen live: line 2 "must hit close to home for many Indian households" is soft filler the generic-phrase list doesn't catch.
+
 ## Not tested yet
-- Cases 5, 6 and 7 on real websites.
-- The deployed Vercel build (see `deploy.md`).
+- Case 7 (insufficient evidence) on a real website.
 - OpenRouter as the provider (built, never run live).
