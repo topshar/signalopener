@@ -4,6 +4,7 @@ export type GenerateJsonRequest = {
   system: string;
   user: string;
   schema: object;
+  timeoutMs?: number;
 };
 
 export type GenerateJsonResult = {
@@ -14,9 +15,11 @@ export type GenerateJsonResult = {
 
 /** Every provider implements this one method. Swapping providers is a config change. */
 export interface AIProvider {
-  readonly name: "gemini" | "openrouter";
+  readonly name: "gemini" | "openrouter" | "test";
   readonly model: string;
   generateJson(req: GenerateJsonRequest): Promise<GenerateJsonResult>;
 }
 
-export const MODEL_TIMEOUT_MS = 45_000;
+// Stage 1 used 45s and a 503 took 46s to surface. Fail fast instead; the
+// pipeline retries a "busy" error once if there is time left.
+export const MODEL_TIMEOUT_MS = 25_000;

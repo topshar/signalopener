@@ -1,7 +1,7 @@
 import * as cheerio from "cheerio";
 import type { PageContent } from "./types";
 
-const MAX_TEXT_CHARS = 12_000; // roughly 2.5-3k tokens; keeps model input small
+const DEFAULT_MAX_TEXT_CHARS = 6_000; // ~1.5k tokens per page; keeps model input small
 const MAX_HEADINGS = 30;
 const MAX_LINKS = 100;
 
@@ -80,7 +80,11 @@ function collectInternalLinks($: cheerio.CheerioAPI, pageUrl: URL): string[] {
  * Turns raw HTML into a compact, readable summary of the page.
  * Deterministic and model-free: what goes to the AI is exactly what this returns.
  */
-export function extractPage(html: string, pageUrl: string): PageContent {
+export function extractPage(
+  html: string,
+  pageUrl: string,
+  maxTextChars = DEFAULT_MAX_TEXT_CHARS,
+): PageContent {
   const url = new URL(pageUrl);
   const $ = cheerio.load(html);
 
@@ -122,11 +126,18 @@ export function extractPage(html: string, pageUrl: string): PageContent {
     const line = clean(rawLine);
     if (line.length < 2 || seenLines.has(line)) continue; // drop blanks and repeated text
     seenLines.add(line);
+    // Lines of one or two words are almost always buttons and menu labels
+    // ("Get started", "Pricing"). Headings are kept separately above.
+    if (line.split(" ").length <= 2 && !/\d/.test(line)) continue;
     lines.push(line);
   }
 
   let text = lines.join("\n");
-  if (text.length > MAX_TEXT_CHARS) text = text.slice(0, MAX_TEXT_CHARS);
+  if (text.length > maxTextChars) {
+    // Cut at a line boundary so we never hand the model half a sentence to quote.
+    const cut = text.lastIndexOf("\n", maxTextChars);
+    text = text.slice(0, cut > maxTextChars * 0.6 ? cut : maxTextChars);
+  }
   const wordCount = text ? text.split(/\s+/).length : 0;
 
   return {
@@ -143,6 +154,16 @@ export function extractPage(html: string, pageUrl: string): PageContent {
   };
 }
 
+/**
+ * Everything the model is shown for a page, as one string. Quote verification
+ * runs against exactly this, so the model can only "quote" what it was given.
+ */
+export function pageCorpus(page: PageContent): string {
+  return [page.title, page.description, ...page.structuredData, ...page.headings, page.text].join(
+    "\n",
+  );
+}
+
 export type ContentAssessment =
   | { ok: true }
   | { ok: false; reason: "js_rendered" | "thin_content"; message: string };
@@ -154,10 +175,10 @@ const MIN_WORDS = 80;
  * A page with very little text and lots of scripts is most likely a JavaScript app
  * that renders in the browser, which a plain HTTP fetch can't see.
  */
-export function assessContent(page: PageContent): ContentAssessment {
-  if (page.wordCount >= MIN_WORDS) return { ok: true };
+export function assessContent(home: PageContent, totalWords = home.wordCount): ContentAssessment {
+  if (totalWords >= MIN_WORDS) return { ok: true };
 
-  if (page.scriptCount >= 3) {
+  if (home.scriptCount >= 3 && home.wordCount < MIN_WORDS) {
     return {
       ok: false,
       reason: "js_rendered",
@@ -169,6 +190,6 @@ export function assessContent(page: PageContent): ContentAssessment {
     ok: false,
     reason: "thin_content",
     message:
-      "The homepage has too little readable text to find a specific, honest observation. Try a page with more detail, such as the company's About or Product page.",
+      "The website has too little readable text to find a specific, honest observation. Try a page with more detail, such as the company's About or Product page.",
   };
 }

@@ -1,14 +1,18 @@
 import { AppError } from "@/lib/errors";
 import { generateOpener } from "@/lib/pipeline";
 import { MAX_SENDER_CONTEXT } from "@/lib/prompt";
+import { clientIp, RateLimiter } from "@/lib/rate-limit";
 import type { GenerateResponse, OpenerError } from "@/lib/types";
 
-// Fetch (8s) + model (45s) with headroom. Vercel Hobby allows up to 300s.
-export const maxDuration = 60;
+// Run budget is 85s (fetching + up to 2 model rounds + one busy-retry), with headroom.
+// Vercel Hobby allows up to 300s.
+export const maxDuration = 100;
 
-function errorResponse(err: AppError): Response {
+const limiter = new RateLimiter(Number(process.env.DAILY_RUN_LIMIT) || 200);
+
+function errorResponse(err: AppError, headers?: HeadersInit): Response {
   const body: OpenerError = { status: "error", code: err.code, message: err.message };
-  return Response.json(body satisfies GenerateResponse, { status: err.httpStatus });
+  return Response.json(body satisfies GenerateResponse, { status: err.httpStatus, headers });
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -19,12 +23,17 @@ export async function POST(request: Request): Promise<Response> {
     return errorResponse(new AppError("INVALID_INPUT", "Request body must be JSON."));
   }
 
-  const { url, senderContext } = (body ?? {}) as Record<string, unknown>;
+  const { url, senderContext, avoidObservation } = (body ?? {}) as Record<string, unknown>;
   if (typeof url !== "string") {
     return errorResponse(new AppError("INVALID_INPUT", "Enter a company website address."));
   }
-  if (senderContext !== undefined && typeof senderContext !== "string") {
-    return errorResponse(new AppError("INVALID_INPUT", "Sender context must be text."));
+  for (const [name, value] of [
+    ["senderContext", senderContext],
+    ["avoidObservation", avoidObservation],
+  ] as const) {
+    if (value !== undefined && typeof value !== "string") {
+      return errorResponse(new AppError("INVALID_INPUT", `${name} must be text.`));
+    }
   }
   if (typeof senderContext === "string" && senderContext.length > MAX_SENDER_CONTEXT) {
     return errorResponse(
@@ -35,8 +44,19 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
+  const limit = limiter.check(clientIp(request));
+  if (!limit.ok) {
+    return errorResponse(new AppError("RATE_LIMITED", limit.message, 429), {
+      "retry-after": String(limit.retryAfterSec),
+    });
+  }
+
   try {
-    const result = await generateOpener({ url, senderContext: senderContext ?? "" });
+    const result = await generateOpener({
+      url,
+      senderContext: (senderContext as string | undefined) ?? "",
+      avoidObservation: (avoidObservation as string | undefined)?.slice(0, MAX_SENDER_CONTEXT) || undefined,
+    });
     return Response.json(result satisfies GenerateResponse);
   } catch (err) {
     if (err instanceof AppError) {

@@ -5,9 +5,10 @@ import { useEffect, useState } from "react";
 // Timed labels for the one request in flight. They describe the real stages of
 // the pipeline, but the timing is approximate (the server doesn't stream progress).
 const STEPS = [
-  { label: "Fetching the homepage", at: 0 },
-  { label: "Reading and cleaning the content", at: 2500 },
-  { label: "Finding a specific observation and drafting", at: 5000 },
+  { label: "Reading the homepage", at: 0 },
+  { label: "Reading pages like pricing, about and changelog", at: 1800 },
+  { label: "Drafting the opener", at: 4000 },
+  { label: "Checking it against the website", at: 9000 },
 ];
 
 export function LoadingSteps() {
@@ -48,7 +49,7 @@ export function LoadingSteps() {
           );
         })}
       </ol>
-      <p className="mt-5 text-[13px] text-muted">Usually takes 5 to 20 seconds.</p>
+      <p className="mt-5 text-[13px] text-muted">Usually takes 5 to 20 seconds. Longer if the AI provider is busy.</p>
     </div>
   );
 }

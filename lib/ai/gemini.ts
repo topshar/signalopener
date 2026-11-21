@@ -17,31 +17,65 @@ type GeminiResponse = {
   };
 };
 
-export function createGeminiProvider(apiKey: string, model: string): AIProvider {
+/**
+ * thinkingLevel: Stage 1 measured 2,201 thinking tokens for 196 output tokens.
+ * Thinking is billed as output and dominated latency, so we ask for "low".
+ * Set GEMINI_THINKING_LEVEL to "" to send no thinking config at all.
+ */
+export function createGeminiProvider(
+  apiKey: string,
+  model: string,
+  thinkingLevel: string,
+): AIProvider {
+  // Flipped off for this process if the API rejects the field for this model.
+  let sendThinking = Boolean(thinkingLevel);
+
+  async function call({ system, user, schema, timeoutMs }: GenerateJsonRequest) {
+    const generationConfig: Record<string, unknown> = {
+      responseMimeType: "application/json",
+      responseSchema: schema,
+      temperature: 0.6,
+      // Generous cap: on thinking models, reasoning tokens count against it.
+      maxOutputTokens: 8192,
+    };
+    if (sendThinking) generationConfig.thinkingConfig = { thinkingLevel };
+
+    return fetch(`${API_BASE}/${encodeURIComponent(model)}:generateContent`, {
+      method: "POST",
+      signal: AbortSignal.timeout(timeoutMs ?? MODEL_TIMEOUT_MS),
+      headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: system }] },
+        contents: [{ role: "user", parts: [{ text: user }] }],
+        generationConfig,
+      }),
+    });
+  }
+
   return {
     name: "gemini",
     model,
-    async generateJson({ system, user, schema }: GenerateJsonRequest) {
+    async generateJson(req: GenerateJsonRequest) {
       const started = Date.now();
       let res: Response;
       try {
-        res = await fetch(`${API_BASE}/${encodeURIComponent(model)}:generateContent`, {
-          method: "POST",
-          signal: AbortSignal.timeout(MODEL_TIMEOUT_MS),
-          headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
-          body: JSON.stringify({
-            systemInstruction: { parts: [{ text: system }] },
-            contents: [{ role: "user", parts: [{ text: user }] }],
-            generationConfig: {
-              responseMimeType: "application/json",
-              responseSchema: schema,
-              temperature: 0.6,
-              // Generous cap: on thinking models, reasoning tokens count against it.
-              maxOutputTokens: 8192,
-            },
-          }),
-        });
+        res = await call(req);
+        if (res.status === 400 && sendThinking) {
+          const body = await res.text();
+          if (/thinking/i.test(body)) {
+            // This model doesn't accept the thinking setting. Say so in the logs
+            // and repeat the same request without it (same model, same provider).
+            console.warn(
+              JSON.stringify({ event: "gemini_thinking_unsupported", model, detail: body.slice(0, 300) }),
+            );
+            sendThinking = false;
+            res = await call(req);
+          } else {
+            throw providerHttpError("gemini", 400, body);
+          }
+        }
       } catch (err) {
+        if (err instanceof AppError) throw err;
         throw providerNetworkError("gemini", err);
       }
 

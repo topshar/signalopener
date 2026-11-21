@@ -13,18 +13,22 @@ export default function Home() {
   const [senderContext, setSenderContext] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<GenerateResponse | null>(null);
+  // What the current result was generated from, so "Different angle" reuses it
+  // even if the user has started editing the form.
+  const [lastRequest, setLastRequest] = useState<{ url: string; senderContext: string } | null>(
+    null,
+  );
 
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (!url.trim() || loading) return;
-
+  async function run(request: { url: string; senderContext: string }, avoidObservation?: string) {
+    if (loading) return;
     setLoading(true);
     setResult(null);
+    setLastRequest(request);
     try {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ url: url.trim(), senderContext: senderContext.trim() }),
+        body: JSON.stringify({ ...request, avoidObservation }),
       });
       const data = (await res.json()) as GenerateResponse;
       setResult(data);
@@ -37,6 +41,16 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
+  }
+
+  function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!url.trim()) return;
+    run({ url: url.trim(), senderContext: senderContext.trim() });
+  }
+
+  function onRegenerate() {
+    if (result?.status === "ok" && lastRequest) run(lastRequest, result.observation);
   }
 
   return (
@@ -53,8 +67,9 @@ export default function Home() {
           Founder openers built from what their website actually says.
         </h1>
         <p className="mt-4 max-w-[560px] text-[16px] leading-relaxed text-ink-soft">
-          Paste a company&apos;s website. SignalOpener reads it, picks one specific observation and
-          drafts a three-line cold email opener, with the source so you can check it.
+          Paste a company&apos;s website. SignalOpener reads a few of its pages, picks one specific
+          observation and drafts a three-line cold email opener. Every quote is checked against the
+          site before you see it.
         </p>
 
         <form
@@ -116,7 +131,9 @@ export default function Home() {
 
         <div className="mt-10" aria-live="polite">
           {loading && <LoadingSteps />}
-          {!loading && result?.status === "ok" && <ResultView result={result} />}
+          {!loading && result?.status === "ok" && (
+            <ResultView result={result} onRegenerate={onRegenerate} />
+          )}
           {!loading && result?.status === "insufficient" && <InsufficientNotice result={result} />}
           {!loading && result?.status === "error" && <ErrorNotice error={result} />}
         </div>

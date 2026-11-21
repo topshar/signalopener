@@ -27,6 +27,14 @@ export function providerHttpError(provider: string, status: number, body: string
       detail,
     );
   }
+  if (status === 500 || status === 502 || status === 503 || status === 504) {
+    return new AppError(
+      "AI_UNAVAILABLE",
+      "The AI model is busy right now (high demand on the free tier). Try again in a minute.",
+      503,
+      detail,
+    );
+  }
   if (status === 402) {
     return new AppError(
       "AI_RATE_LIMITED",

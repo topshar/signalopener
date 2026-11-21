@@ -9,7 +9,7 @@ export type PageContent = {
   headings: string[];
   text: string; // cleaned body text, one block per line
   wordCount: number;
-  internalLinks: string[]; // same-site links, kept for Stage 2 page selection
+  internalLinks: string[]; // same-site links, used for page selection
   scriptCount: number;
 };
 
@@ -19,34 +19,61 @@ export type TokenUsage = {
   thinkingTokens?: number;
 };
 
+export type PageRead = { url: string; title: string; category: string };
+
 export type RunMeta = {
   provider: string;
   model: string;
-  pagesFetched: string[];
+  pagesRead: PageRead[];
   wordsExtracted: number;
   fetchMs: number;
   modelMs: number;
   totalMs: number;
+  attempts: number; // generate-and-validate rounds (max 2)
+  modelCalls: number; // includes a retry after a provider "busy" error
   usage?: TokenUsage;
+};
+
+export type CheckStatus = "pass" | "warn" | "fail";
+
+export type ValidationCheck = {
+  id: string;
+  label: string;
+  status: CheckStatus;
+  detail?: string;
+};
+
+export type Evidence = {
+  quote: string;
+  sourceUrl: string;
+  sourceTitle: string;
+  sourceCorrected: boolean; // quote found on a different fetched page than the model cited
 };
 
 export type OpenerSuccess = {
   status: "ok";
   companySummary: string;
   observation: string;
-  supportingQuote: string; // as cited by the model; NOT verified in Stage 1
-  sourceUrl: string;
   interpretation: string;
   lines: [string, string, string];
+  evidence: Evidence;
+  checks: ValidationCheck[];
+  cached: boolean;
   meta: RunMeta;
 };
 
-export type InsufficientReason = "js_rendered" | "thin_content" | "model_insufficient";
+export type InsufficientReason =
+  | "js_rendered"
+  | "thin_content"
+  | "model_insufficient"
+  | "unverified";
 
 export type OpenerInsufficient = {
   status: "insufficient";
   reason: InsufficientReason;
   message: string;
+  checks?: ValidationCheck[];
+  cached: boolean;
   meta: Partial<RunMeta>;
 };
 
@@ -61,8 +88,10 @@ export type ErrorCode =
   | "TOO_LARGE"
   | "TOO_MANY_REDIRECTS"
   | "NETWORK"
+  | "RATE_LIMITED"
   | "AI_CONFIG"
   | "AI_RATE_LIMITED"
+  | "AI_UNAVAILABLE"
   | "AI_MODEL_UNAVAILABLE"
   | "AI_TIMEOUT"
   | "AI_BLOCKED"

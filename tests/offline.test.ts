@@ -102,9 +102,9 @@ describe("extractPage", () => {
     assert.doesNotMatch(page.text, /Ledgerly Pty Ltd/);
     assert.doesNotMatch(page.text, /window\.analytics/);
   });
-  it("keeps adjacent blocks as separate lines and drops repeated text", () => {
-    assert.match(page.text, /^Features$/m);
+  it("keeps adjacent blocks as separate lines, drops menu labels and repeated text", () => {
     assert.doesNotMatch(page.text, /FeaturesPricing/);
+    assert.doesNotMatch(page.text, /^Features$/m); // 1-2 word lines are button/menu labels
     const repeats = page.text.split("\n").filter((l) => l.startsWith("Every plan includes"));
     assert.equal(repeats.length, 1);
   });

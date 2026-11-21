@@ -19,13 +19,13 @@ export function createOpenRouterProvider(apiKey: string, model: string): AIProvi
   return {
     name: "openrouter",
     model,
-    async generateJson({ system, user, schema }: GenerateJsonRequest) {
+    async generateJson({ system, user, schema, timeoutMs }: GenerateJsonRequest) {
       const started = Date.now();
       let res: Response;
       try {
         res = await fetch(API_URL, {
           method: "POST",
-          signal: AbortSignal.timeout(MODEL_TIMEOUT_MS),
+          signal: AbortSignal.timeout(timeoutMs ?? MODEL_TIMEOUT_MS),
           headers: {
             "content-type": "application/json",
             authorization: `Bearer ${apiKey}`,

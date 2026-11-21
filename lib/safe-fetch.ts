@@ -1,5 +1,9 @@
 import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
+import http from "node:http";
+import https from "node:https";
+import { isIP, type LookupFunction } from "node:net";
+import type { Readable } from "node:stream";
+import zlib from "node:zlib";
 import { AppError } from "./errors";
 import { isBlockedIp } from "./ip";
 import { assertUrlShape } from "./url";
@@ -11,110 +15,217 @@ export type FetchedPage = {
   truncated: boolean;
 };
 
-type Options = {
+export type FetchOptions = {
   timeoutMs?: number;
   maxBytes?: number;
   maxRedirects?: number;
 };
 
+/** Injectable for tests. Production always uses the defaults. */
+export type FetchDeps = {
+  resolve: (hostname: string) => Promise<string[]>;
+  isBlocked: (ip: string) => boolean;
+};
+
+const defaultDeps: FetchDeps = {
+  resolve: async (host) => (await lookup(host, { all: true, verbatim: true })).map((a) => a.address),
+  isBlocked: isBlockedIp,
+};
+
 const USER_AGENT =
-  "Mozilla/5.0 (compatible; SignalOpener/0.1; company research for outreach drafts)";
+  "Mozilla/5.0 (compatible; SignalOpener/0.2; company research for outreach drafts)";
+
+type Pinned = { address: string; family: 4 | 6 };
 
 /**
- * Resolves the hostname and refuses if ANY resolved address is private.
- * Checking all addresses stops "one public + one private A record" tricks.
- *
- * Known gap (fixed in Stage 2): fetch() does its own DNS lookup after this
- * check, so a hostile DNS server could answer differently the second time
- * (DNS rebinding). Closing that needs the connection pinned to the IP we
- * checked here.
+ * Resolves the hostname once, refuses if ANY address is private, and returns
+ * the address we will connect to. The connection is then pinned to this exact
+ * address (see requestOnce), so a second DNS answer can't redirect us to an
+ * internal IP. That closes the DNS rebinding gap from Stage 1.
  */
-async function assertPublicHost(hostname: string): Promise<void> {
+async function resolvePublic(hostname: string, deps: FetchDeps): Promise<Pinned> {
   const host = hostname.replace(/^\[|\]$/g, "");
-
-  if (isIP(host)) {
-    if (isBlockedIp(host)) {
+  const literal = isIP(host);
+  if (literal) {
+    if (deps.isBlocked(host)) {
       throw new AppError("BLOCKED_HOST", "That address points to a private network.");
     }
-    return;
+    return { address: host, family: literal as 4 | 6 };
   }
 
-  let addresses: { address: string }[];
+  let addresses: string[];
   try {
-    addresses = await lookup(host, { all: true, verbatim: true });
+    addresses = await deps.resolve(host);
   } catch {
     throw new AppError("DNS_FAILED", "We couldn't find that domain. Check the spelling.");
   }
-  if (addresses.length === 0 || addresses.some((a) => isBlockedIp(a.address))) {
+  if (addresses.length === 0 || addresses.some((a) => deps.isBlocked(a))) {
     throw new AppError("BLOCKED_HOST", "That domain resolves to a private network address.");
   }
+  const address = addresses[0];
+  return { address, family: isIP(address) === 6 ? 6 : 4 };
 }
 
-function isHtml(contentType: string | null): boolean {
+function pinnedLookup(pinned: Pinned): LookupFunction {
+  return (_hostname, options, callback) => {
+    // Node may ask for all addresses (happy-eyeballs); answer with only the pinned one.
+    if (typeof options === "object" && options?.all) {
+      (callback as unknown as (e: null, a: { address: string; family: number }[]) => void)(null, [
+        { address: pinned.address, family: pinned.family },
+      ]);
+    } else {
+      callback(null, pinned.address, pinned.family);
+    }
+  };
+}
+
+function isHtml(contentType: string | undefined): boolean {
   if (!contentType) return true; // many small sites omit it; the extractor copes
   const ct = contentType.toLowerCase();
   return ct.includes("text/html") || ct.includes("application/xhtml+xml");
 }
 
-function charsetFrom(contentType: string | null): string {
-  const m = contentType?.match(/charset=["']?([\w-]+)/i);
-  return m ? m[1].toLowerCase() : "utf-8";
+function decoderFor(contentType: string | undefined): TextDecoder {
+  const charset = contentType?.match(/charset=["']?([\w-]+)/i)?.[1]?.toLowerCase() ?? "utf-8";
+  try {
+    return new TextDecoder(charset);
+  } catch {
+    return new TextDecoder("utf-8");
+  }
 }
 
-/** Reads the body as text, stopping at maxBytes instead of loading it all. */
-async function readCapped(
-  res: Response,
+function decompress(res: http.IncomingMessage): Readable {
+  const enc = String(res.headers["content-encoding"] ?? "").toLowerCase();
+  if (enc === "gzip" || enc === "x-gzip") return res.pipe(zlib.createGunzip());
+  if (enc === "deflate") return res.pipe(zlib.createInflate());
+  if (enc === "br") return res.pipe(zlib.createBrotliDecompress());
+  return res;
+}
+
+/** Reads at most maxBytes of DECOMPRESSED body, which also stops compression bombs. */
+function readCapped(
+  stream: Readable,
   maxBytes: number,
+  contentType: string | undefined,
 ): Promise<{ text: string; truncated: boolean }> {
-  if (!res.body) return { text: "", truncated: false };
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let finished = false;
+    const finish = (truncated: boolean) => {
+      if (finished) return;
+      finished = true;
+      resolve({ text: decoderFor(contentType).decode(Buffer.concat(chunks)), truncated });
+    };
+    stream.on("data", (chunk: Buffer) => {
+      if (finished) return;
+      const remaining = maxBytes - size;
+      if (chunk.length >= remaining) {
+        chunks.push(chunk.subarray(0, remaining));
+        size = maxBytes;
+        finish(true);
+        stream.destroy();
+        return;
+      }
+      chunks.push(chunk);
+      size += chunk.length;
+    });
+    stream.on("end", () => finish(false));
+    stream.on("error", (err) => {
+      if (!finished) reject(err);
+    });
+  });
+}
 
-  const reader = res.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let received = 0;
-  let truncated = false;
+type OnceResult =
+  | { kind: "redirect"; location: string | undefined }
+  | { kind: "page"; html: string; truncated: boolean };
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    const remaining = maxBytes - received;
-    if (value.byteLength >= remaining) {
-      chunks.push(value.subarray(0, remaining));
-      received += remaining;
-      truncated = true;
-      await reader.cancel();
-      break;
-    }
-    chunks.push(value);
-    received += value.byteLength;
-  }
+function requestOnce(
+  url: URL,
+  pinned: Pinned,
+  signal: AbortSignal,
+  maxBytes: number,
+): Promise<OnceResult> {
+  const mod = url.protocol === "https:" ? https : http;
+  return new Promise((resolve, reject) => {
+    const req = mod.request(
+      url,
+      {
+        method: "GET",
+        lookup: pinnedLookup(pinned),
+        agent: false, // no connection reuse across hosts or redirects
+        signal,
+        headers: {
+          "user-agent": USER_AGENT,
+          accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5",
+          "accept-language": "en;q=0.9",
+          "accept-encoding": "gzip, deflate, br",
+        },
+      },
+      (res) => {
+        const status = res.statusCode ?? 0;
 
-  const bytes = new Uint8Array(received);
-  let offset = 0;
-  for (const c of chunks) {
-    bytes.set(c, offset);
-    offset += c.byteLength;
-  }
+        if (status >= 300 && status < 400) {
+          res.resume();
+          resolve({ kind: "redirect", location: res.headers.location });
+          return;
+        }
+        if (status < 200 || status >= 300) {
+          res.resume();
+          const blockedHint =
+            status === 403 || status === 429 || status === 503
+              ? " The site may be blocking automated requests."
+              : "";
+          reject(
+            new AppError(
+              "HTTP_ERROR",
+              `The website responded with an error (HTTP ${status}).${blockedHint}`,
+              502,
+            ),
+          );
+          return;
+        }
 
-  let decoder: TextDecoder;
-  try {
-    decoder = new TextDecoder(charsetFrom(res.headers.get("content-type")));
-  } catch {
-    decoder = new TextDecoder("utf-8");
-  }
-  return { text: decoder.decode(bytes), truncated };
+        const contentType = res.headers["content-type"];
+        if (!isHtml(contentType)) {
+          res.resume();
+          reject(new AppError("NOT_HTML", "That address doesn't return a web page (HTML)."));
+          return;
+        }
+        const declared = Number(res.headers["content-length"] ?? 0);
+        if (declared > maxBytes * 5) {
+          res.destroy();
+          reject(new AppError("TOO_LARGE", "That page is too large to analyse."));
+          return;
+        }
+
+        readCapped(decompress(res), maxBytes, contentType)
+          .then(({ text, truncated }) => resolve({ kind: "page", html: text, truncated }))
+          .catch(reject);
+      },
+    );
+    req.on("error", reject);
+    req.end();
+  });
 }
 
 /**
  * Fetches one HTML page with SSRF protections:
  * - http/https on ports 80/443 only, no embedded credentials
- * - DNS resolved and every address checked against private ranges
- * - redirects followed manually (max 3) and every hop re-checked
+ * - DNS resolved once; every address checked against private ranges
+ * - the TCP connection is pinned to the checked address (no DNS rebinding)
+ * - redirects followed manually (max 3), each hop re-validated and re-pinned
  * - one timeout covering the whole operation, including the body
- * - body capped at maxBytes; non-HTML responses rejected
+ * - decompressed body capped at maxBytes; non-HTML responses rejected
  */
-export async function safeFetchHtml(url: URL, opts: Options = {}): Promise<FetchedPage> {
+export async function safeFetchHtml(
+  url: URL,
+  opts: FetchOptions = {},
+  deps: FetchDeps = defaultDeps,
+): Promise<FetchedPage> {
   const timeoutMs = opts.timeoutMs ?? 8000;
-  const maxBytes = opts.maxBytes ?? 2_000_000;
+  const maxBytes = opts.maxBytes ?? 1_500_000;
   const maxRedirects = opts.maxRedirects ?? 3;
 
   const signal = AbortSignal.timeout(timeoutMs);
@@ -123,71 +234,37 @@ export async function safeFetchHtml(url: URL, opts: Options = {}): Promise<Fetch
   try {
     for (let hop = 0; hop <= maxRedirects; hop++) {
       assertUrlShape(current);
-      await assertPublicHost(current.hostname);
+      const pinned = await resolvePublic(current.hostname, deps);
+      const result = await requestOnce(current, pinned, signal, maxBytes);
 
-      const res = await fetch(current, {
-        method: "GET",
-        redirect: "manual",
-        signal,
-        headers: {
-          "user-agent": USER_AGENT,
-          accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5",
-          "accept-language": "en;q=0.9",
-        },
-      });
-
-      if (res.status >= 300 && res.status < 400) {
-        const location = res.headers.get("location");
-        await res.body?.cancel();
-        if (!location) {
+      if (result.kind === "redirect") {
+        if (!result.location) {
           throw new AppError("HTTP_ERROR", "The website sent a redirect with no destination.");
         }
-        current = new URL(location, current);
+        current = new URL(result.location, current);
         current.hash = "";
         continue;
       }
-
-      if (!res.ok) {
-        await res.body?.cancel();
-        const blockedHint =
-          res.status === 403 || res.status === 429 || res.status === 503
-            ? " The site may be blocking automated requests."
-            : "";
-        throw new AppError(
-          "HTTP_ERROR",
-          `The website responded with an error (HTTP ${res.status}).${blockedHint}`,
-          502,
-        );
-      }
-
-      const contentType = res.headers.get("content-type");
-      if (!isHtml(contentType)) {
-        await res.body?.cancel();
-        throw new AppError("NOT_HTML", "That address doesn't return a web page (HTML).");
-      }
-
-      const declared = Number(res.headers.get("content-length") ?? 0);
-      if (declared > maxBytes * 5) {
-        await res.body?.cancel();
-        throw new AppError("TOO_LARGE", "That page is too large to analyse.");
-      }
-
-      const { text, truncated } = await readCapped(res, maxBytes);
-      return { requestedUrl: url.toString(), finalUrl: current.toString(), html: text, truncated };
+      return {
+        requestedUrl: url.toString(),
+        finalUrl: current.toString(),
+        html: result.html,
+        truncated: result.truncated,
+      };
     }
-
     throw new AppError("TOO_MANY_REDIRECTS", "The website redirected too many times.");
   } catch (err) {
     if (err instanceof AppError) throw err;
-    const name = (err as Error)?.name;
-    if (name === "TimeoutError" || name === "AbortError") {
+    if (signal.aborted) {
       throw new AppError("TIMEOUT", "The website took too long to respond.", 504);
     }
+    const code = (err as NodeJS.ErrnoException)?.code;
+    const tlsHint = code?.startsWith("ERR_TLS") || code?.includes("CERT") ? " (TLS/certificate problem)" : "";
     throw new AppError(
       "NETWORK",
-      "We couldn't connect to that website.",
+      `We couldn't connect to that website${tlsHint}.`,
       502,
-      String((err as Error)?.cause ?? err),
+      String(code ?? err),
     );
   }
 }
