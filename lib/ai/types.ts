@@ -22,4 +22,4 @@ export interface AIProvider {
 
 // Stage 1 used 45s and a 503 took 46s to surface. Fail fast instead; the
 // pipeline retries a "busy" error once if there is time left.
-export const MODEL_TIMEOUT_MS = 25_000;
+export const MODEL_TIMEOUT_MS = 40_000;

@@ -137,6 +137,28 @@ function readCapped(
   });
 }
 
+/** Bot-protection services answer automated requests with a challenge instead of the page. */
+function looksLikeBotProtection(status: number, headers: http.IncomingHttpHeaders): boolean {
+  if (status !== 403 && status !== 429 && status !== 503) return false;
+  const server = String(headers["server"] ?? "").toLowerCase();
+  return (
+    headers["cf-mitigated"] !== undefined ||
+    server.includes("cloudflare") ||
+    server.includes("akamai") ||
+    headers["x-datadome"] !== undefined ||
+    headers["x-px-block"] !== undefined ||
+    String(headers["x-amzn-waf-action"] ?? "") !== ""
+  );
+}
+
+export function blockedBySite(): AppError {
+  return new AppError(
+    "BLOCKED_BY_SITE",
+    "This website uses bot protection that blocks automated tools like SignalOpener, so we can't read it. That's the site owner's choice, and we don't try to get around it.",
+    502,
+  );
+}
+
 type OnceResult =
   | { kind: "redirect"; location: string | undefined }
   | { kind: "page"; html: string; truncated: boolean };
@@ -173,6 +195,10 @@ function requestOnce(
         }
         if (status < 200 || status >= 300) {
           res.resume();
+          if (looksLikeBotProtection(status, res.headers)) {
+            reject(blockedBySite());
+            return;
+          }
           const blockedHint =
             status === 403 || status === 429 || status === 503
               ? " The site may be blocking automated requests."

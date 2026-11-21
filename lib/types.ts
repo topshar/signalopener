@@ -20,11 +20,13 @@ export type TokenUsage = {
 };
 
 export type PageRead = { url: string; title: string; category: string };
+export type PageSkipped = { url: string; category: string; reason: string };
 
 export type RunMeta = {
   provider: string;
   model: string;
   pagesRead: PageRead[];
+  pagesSkipped: PageSkipped[];
   wordsExtracted: number;
   fetchMs: number;
   modelMs: number;
@@ -48,6 +50,7 @@ export type Evidence = {
   sourceUrl: string;
   sourceTitle: string;
   sourceCorrected: boolean; // quote found on a different fetched page than the model cited
+  sourceKind: "page" | "pasted"; // fetched by us, or text the user pasted from the site
 };
 
 export type OpenerSuccess = {
@@ -88,6 +91,7 @@ export type ErrorCode =
   | "TOO_LARGE"
   | "TOO_MANY_REDIRECTS"
   | "NETWORK"
+  | "BLOCKED_BY_SITE"
   | "RATE_LIMITED"
   | "AI_CONFIG"
   | "AI_RATE_LIMITED"

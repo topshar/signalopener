@@ -2,16 +2,23 @@ import { getProvider } from "./ai";
 import type { AIProvider, GenerateJsonRequest, GenerateJsonResult } from "./ai/types";
 import { cacheKey, TtlCache } from "./cache";
 import { AppError } from "./errors";
-import { assessContent, extractPage } from "./extract";
+import {
+  assessContent,
+  extractPage,
+  isBotChallenge,
+  pageFromPastedText,
+  type ContentAssessment,
+} from "./extract";
 import { selectPages } from "./pages";
 import { parseModelOutput } from "./parse";
 import { buildUserPrompt, OUTPUT_SCHEMA, SYSTEM_PROMPT } from "./prompt";
-import { safeFetchHtml, type FetchedPage, type FetchOptions } from "./safe-fetch";
+import { blockedBySite, safeFetchHtml, type FetchedPage, type FetchOptions } from "./safe-fetch";
 import type {
   OpenerInsufficient,
   OpenerSuccess,
   PageContent,
   PageRead,
+  PageSkipped,
   TokenUsage,
   ValidationCheck,
 } from "./types";
@@ -22,6 +29,7 @@ export type GenerateInput = {
   url: string;
   senderContext: string;
   avoidObservation?: string; // "try a different angle"
+  pastedText?: string; // text the user copied from the site, used instead of fetching
 };
 
 export type PipelineDeps = {
@@ -37,9 +45,10 @@ const defaultDeps: PipelineDeps = { fetchPage: safeFetchHtml, cache: sharedCache
 
 const HOMEPAGE_CHARS = 6_000;
 const SUBPAGE_CHARS = 3_000;
+const MIN_PASTED_WORDS = 40;
 const MAX_ATTEMPTS = 2; // generate + one retry after failed validation
 const RUN_BUDGET_MS = 85_000; // keeps us inside the route's maxDuration
-const MODEL_TIMEOUT_MS = 25_000;
+const MODEL_TIMEOUT_MS = 40_000;
 
 type Usage = Required<TokenUsage>;
 
@@ -61,8 +70,9 @@ export async function generateOpener(
 
   const url = normalizeUrl(input.url);
   const key = cacheKey(url, input.senderContext);
-  // "Different angle" requests skip the cache in both directions.
-  const cache = input.avoidObservation ? undefined : deps.cache;
+  // "Different angle" and pasted-text requests skip the cache in both directions.
+  const pasted = Boolean(input.pastedText?.trim());
+  const cache = input.avoidObservation || pasted ? undefined : deps.cache;
   if (cache) {
     const hit = cache.get(key);
     if (hit) {
@@ -79,46 +89,33 @@ export async function generateOpener(
   // Read AI config before fetching so a missing API key fails fast.
   const provider = deps.provider ?? getProvider();
 
-  // --- Research: homepage, then up to three internal pages in parallel -------
-  const fetchStart = Date.now();
-  const homeFetched = await deps.fetchPage(url, { timeoutMs: 8000 });
-  const home = extractPage(homeFetched.html, homeFetched.finalUrl, HOMEPAGE_CHARS);
-
-  const selected = selectPages(home.internalLinks, home.url, 3);
-  const settled = await Promise.allSettled(
-    selected.map((s) => deps.fetchPage(new URL(s.url), { timeoutMs: 6000, maxBytes: 1_000_000 })),
-  );
-
-  const pages: PageContent[] = [home];
-  const pagesRead: PageRead[] = [{ url: home.url, title: home.title, category: "homepage" }];
-  const skipped: string[] = [];
-  settled.forEach((r, i) => {
-    if (r.status === "rejected") {
-      skipped.push(`${selected[i].url} (${r.reason instanceof AppError ? r.reason.code : "error"})`);
-      return;
-    }
-    const page = extractPage(r.value.html, r.value.finalUrl, SUBPAGE_CHARS);
-    const duplicate = pages.some((p) => p.url === page.url || p.text === page.text);
-    if (duplicate || page.wordCount < 30) {
-      skipped.push(`${selected[i].url} (${duplicate ? "duplicate" : "too little text"})`);
-      return;
-    }
-    pages.push(page);
-    pagesRead.push({ url: page.url, title: page.title, category: selected[i].category });
-  });
-  const fetchMs = Date.now() - fetchStart;
+  // --- Research: fetch the site, or use the text the user pasted ------------
+  const { pages, pagesRead, pagesSkipped, fetchMs } = pasted
+    ? pastedResearch(input.pastedText!, url)
+    : await researchSite(url, deps);
+  const home = pages[0];
   const wordsExtracted = pages.reduce((n, p) => n + p.wordCount, 0);
 
   // --- Enough to work with? If not, don't spend a model call. ----------------
-  const assessment = assessContent(home, wordsExtracted);
+  // Pasted text was chosen by the user, so one solid paragraph is enough.
+  const assessment: ContentAssessment = !pasted
+    ? assessContent(home, wordsExtracted)
+    : wordsExtracted >= MIN_PASTED_WORDS
+      ? { ok: true }
+      : {
+          ok: false,
+          reason: "thin_content",
+          message:
+            "The pasted text is too short to find a specific observation. Paste a few paragraphs from their About, Product or Pricing page.",
+        };
   if (!assessment.ok) {
-    log({ outcome: assessment.reason, url: home.url, words: wordsExtracted, fetchMs, skipped });
+    log({ outcome: assessment.reason, url: home.url, words: wordsExtracted, fetchMs, skipped: pagesSkipped });
     return store({
       status: "insufficient",
       reason: assessment.reason,
       message: assessment.message,
       cached: false,
-      meta: { pagesRead, wordsExtracted, fetchMs, totalMs: Date.now() - started },
+      meta: { pagesRead, pagesSkipped, wordsExtracted, fetchMs, totalMs: Date.now() - started },
     });
   }
 
@@ -146,9 +143,11 @@ export async function generateOpener(
     };
 
     // Provider errors (busy twice, rate limit, bad key) go straight to the user.
+    // modelMs is wall time, so it includes a failed "busy" call and the pause.
+    const callStart = Date.now();
     const { result, calls } = await callModel(provider, req, remaining, sleep);
     modelCalls += calls;
-    modelMs += result.latencyMs;
+    modelMs += Date.now() - callStart;
     usage.inputTokens += result.usage?.inputTokens ?? 0;
     usage.outputTokens += result.usage?.outputTokens ?? 0;
     usage.thinkingTokens += result.usage?.thinkingTokens ?? 0;
@@ -169,6 +168,7 @@ export async function generateOpener(
       provider: provider.name,
       model: provider.model,
       pagesRead,
+      pagesSkipped,
       wordsExtracted,
       fetchMs,
       modelMs,
@@ -199,7 +199,7 @@ export async function generateOpener(
         observation: parsed.observation,
         interpretation: parsed.interpretation,
         lines: parsed.lines,
-        evidence: v.evidence,
+        evidence: { ...v.evidence, sourceKind: pasted ? "pasted" : "page" },
         checks: v.checks,
         cached: false,
         meta,
@@ -215,6 +215,7 @@ export async function generateOpener(
     provider: provider.name,
     model: provider.model,
     pagesRead,
+    pagesSkipped,
     wordsExtracted,
     fetchMs,
     modelMs,
@@ -232,6 +233,56 @@ export async function generateOpener(
     checks: lastChecks,
     cached: false,
     meta,
+  };
+}
+
+/** Homepage, then up to three internal pages in parallel. */
+async function researchSite(url: URL, deps: PipelineDeps) {
+  const fetchStart = Date.now();
+  const homeFetched = await deps.fetchPage(url, { timeoutMs: 8000 });
+  const home = extractPage(homeFetched.html, homeFetched.finalUrl, HOMEPAGE_CHARS);
+  // A 200 response can still be a "Just a moment..." challenge instead of the site.
+  if (isBotChallenge(home)) throw blockedBySite();
+
+  const selected = selectPages(home.internalLinks, home.url, 3);
+  const settled = await Promise.allSettled(
+    selected.map((s) => deps.fetchPage(new URL(s.url), { timeoutMs: 6000, maxBytes: 1_000_000 })),
+  );
+
+  const pages: PageContent[] = [home];
+  const pagesRead: PageRead[] = [{ url: home.url, title: home.title, category: "homepage" }];
+  const pagesSkipped: PageSkipped[] = [];
+  const skip = (i: number, reason: string) =>
+    pagesSkipped.push({ url: selected[i].url, category: selected[i].category, reason });
+  settled.forEach((r, i) => {
+    if (r.status === "rejected") {
+      skip(i, skipReason(r.reason));
+      return;
+    }
+    const page = extractPage(r.value.html, r.value.finalUrl, SUBPAGE_CHARS);
+    if (isBotChallenge(page)) {
+      skip(i, "blocked by bot protection");
+      return;
+    }
+    const duplicate = pages.some((p) => p.url === page.url || p.text === page.text);
+    if (duplicate || page.wordCount < 30) {
+      skip(i, duplicate ? "same content as another page" : "too little text");
+      return;
+    }
+    pages.push(page);
+    pagesRead.push({ url: page.url, title: page.title, category: selected[i].category });
+  });
+  const fetchMs = Date.now() - fetchStart;
+  return { pages, pagesRead, pagesSkipped, fetchMs };
+}
+
+function pastedResearch(text: string, url: URL) {
+  const page = pageFromPastedText(text, url.toString());
+  return {
+    pages: [page],
+    pagesRead: [{ url: page.url, title: "Text you pasted", category: "pasted" }] as PageRead[],
+    pagesSkipped: [] as PageSkipped[],
+    fetchMs: 0,
   };
 }
 
@@ -255,13 +306,34 @@ async function callModel(
   }
 }
 
+function skipReason(err: unknown): string {
+  if (!(err instanceof AppError)) return "couldn't load";
+  switch (err.code) {
+    case "TIMEOUT":
+      return "too slow to respond";
+    case "BLOCKED_BY_SITE":
+      return "blocked by bot protection";
+    case "NOT_HTML":
+      return "not a web page";
+    case "HTTP_ERROR":
+      return "returned an error";
+    case "BLOCKED_HOST":
+      return "points to a private address";
+    default:
+      return "couldn't load";
+  }
+}
+
 function idsWith(checks: ValidationCheck[], status: string): string[] {
   return checks.filter((c) => c.status === status).map((c) => c.id);
 }
 
 function logMeta(m: Record<string, unknown>) {
-  const { pagesRead, ...rest } = m as { pagesRead: PageRead[] };
-  return { ...rest, pages: pagesRead.length };
+  const { pagesRead, pagesSkipped, ...rest } = m as {
+    pagesRead: PageRead[];
+    pagesSkipped: PageSkipped[];
+  };
+  return { ...rest, pages: pagesRead.length, skipped: pagesSkipped.map((s) => `${s.category}: ${s.reason}`) };
 }
 
 /** One structured log line per event: timings and token usage, never page content. */

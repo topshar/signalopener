@@ -4,14 +4,20 @@ import { useEffect, useState } from "react";
 
 // Timed labels for the one request in flight. They describe the real stages of
 // the pipeline, but the timing is approximate (the server doesn't stream progress).
-const STEPS = [
+const SITE_STEPS = [
   { label: "Reading the homepage", at: 0 },
   { label: "Reading pages like pricing, about and changelog", at: 1800 },
   { label: "Drafting the opener", at: 4000 },
-  { label: "Checking it against the website", at: 9000 },
+  { label: "Checking it against the website", at: 7000 },
+];
+const PASTE_STEPS = [
+  { label: "Reading the text you pasted", at: 0 },
+  { label: "Drafting the opener", at: 800 },
+  { label: "Checking it against your text", at: 4000 },
 ];
 
-export function LoadingSteps() {
+export function LoadingSteps({ pasted = false }: { pasted?: boolean }) {
+  const steps = pasted ? PASTE_STEPS : SITE_STEPS;
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
@@ -20,12 +26,12 @@ export function LoadingSteps() {
     return () => clearInterval(id);
   }, []);
 
-  const active = STEPS.reduce((idx, s, i) => (elapsed >= s.at ? i : idx), 0);
+  const active = steps.reduce((idx, s, i) => (elapsed >= s.at ? i : idx), 0);
 
   return (
     <div className="rounded-xl border border-line bg-surface p-6" role="status" aria-live="polite">
       <ol className="space-y-3">
-        {STEPS.map((step, i) => {
+        {steps.map((step, i) => {
           const done = i < active;
           const current = i === active;
           return (
@@ -49,7 +55,9 @@ export function LoadingSteps() {
           );
         })}
       </ol>
-      <p className="mt-5 text-[13px] text-muted">Usually takes 5 to 20 seconds. Longer if the AI provider is busy.</p>
+      <p className="mt-5 text-[13px] text-muted">
+        Usually takes 5 to 15 seconds. Longer if the AI provider is busy.
+      </p>
     </div>
   );
 }

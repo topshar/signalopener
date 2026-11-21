@@ -14,8 +14,8 @@ export type PageCategory =
 const CATEGORIES: { category: PageCategory; pattern: RegExp }[] = [
   { category: "changelog", pattern: /^(changelog|release-?notes|releases|whats-?new|updates|product-updates)$/ },
   { category: "pricing", pattern: /^(pricing|plans|plans-and-pricing)$/ },
-  { category: "about", pattern: /^(about|about-us|company|our-story|story|team|mission)$/ },
-  { category: "product", pattern: /^(product|products|features|platform|how-it-works|solutions|use-cases)$/ },
+  { category: "about", pattern: /^(about|about-us|aboutus|company|our-company|our-story|story|who-we-are|team|our-team|mission)$/ },
+  { category: "product", pattern: /^(product|products|features|platform|how-it-works|solutions|use-cases|services|our-services|what-we-do|shop|range|brands|our-brands|catalog|catalogue|collections)$/ },
   { category: "customers", pattern: /^(customers|case-studies|customer-stories|testimonials|success-stories)$/ },
   { category: "blog", pattern: /^(blog|news|insights|articles|journal)$/ },
   { category: "careers", pattern: /^(careers|jobs|join-us|hiring|work-with-us)$/ },

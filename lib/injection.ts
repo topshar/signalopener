@@ -11,7 +11,11 @@ const PATTERNS: RegExp[] = [
   /\bnew instructions?\s*:/i,
   /^\s*(system|assistant)\s*:/im,
   /<\/?\s*(system|assistant|website_content|sender_context)\s*>/i,
-  /\b(ai|llm|language model|assistant|chatbot)s?\b[^.\n]{0,40}\b(must|should|are instructed to)\b/i,
+  // Addressed to the AI reading the page ("AI models reading this must..."), not
+  // ordinary copy about AI ("Scrum Masters who ignore AI..."), which is common
+  // on AI-related sites and caused a false positive in live testing.
+  /\b(ai|llm|language model|assistant|chatbot|model)s?\b[^.\n]{0,15}\b(reading|processing|parsing|summari[sz]ing|crawling) this\b/i,
+  /\bif you are an? (ai|llm|language model|assistant|bot)\b/i,
 ];
 
 /** Returns the instruction-like snippets found (trimmed), up to `max`. */

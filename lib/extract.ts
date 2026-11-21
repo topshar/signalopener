@@ -154,6 +154,41 @@ export function extractPage(
   };
 }
 
+const MAX_PASTED_CHARS = 12_000;
+
+/**
+ * Builds a page from text the user copied out of their own browser, for sites
+ * we can't fetch (bot protection, JavaScript-only). Same cleaning and limits as
+ * a fetched page, and the same checks run against it afterwards.
+ */
+export function pageFromPastedText(raw: string, pageUrl: string): PageContent {
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  for (const rawLine of raw.split(/\r?\n/)) {
+    const line = clean(rawLine);
+    if (line.length < 2 || seen.has(line)) continue;
+    seen.add(line);
+    lines.push(line);
+  }
+  let text = lines.join("\n");
+  if (text.length > MAX_PASTED_CHARS) {
+    const cut = text.lastIndexOf("\n", MAX_PASTED_CHARS);
+    text = text.slice(0, cut > MAX_PASTED_CHARS * 0.6 ? cut : MAX_PASTED_CHARS);
+  }
+  return {
+    url: new URL(pageUrl).toString(),
+    title: "",
+    description: "",
+    siteName: "",
+    structuredData: [],
+    headings: [],
+    text,
+    wordCount: text ? text.split(/\s+/).length : 0,
+    internalLinks: [],
+    scriptCount: 0,
+  };
+}
+
 /**
  * Everything the model is shown for a page, as one string. Quote verification
  * runs against exactly this, so the model can only "quote" what it was given.
@@ -162,6 +197,18 @@ export function pageCorpus(page: PageContent): string {
   return [page.title, page.description, ...page.structuredData, ...page.headings, page.text].join(
     "\n",
   );
+}
+
+// Titles and phrases used by bot-protection challenge pages that return HTTP 200.
+const CHALLENGE_PATTERN =
+  /just a moment|attention required|verify you are (a )?human|are you a robot|checking your browser|enable javascript and cookies to continue|access denied|pardon our interruption|request unsuccessful|captcha/i;
+
+/** True when we received a bot-protection challenge instead of the real page. */
+export function isBotChallenge(page: PageContent): boolean {
+  // Challenge pages say so in the title; real pages can mention "captcha" in passing.
+  if (page.wordCount <= 150 && CHALLENGE_PATTERN.test(page.title)) return true;
+  // No telling title: only a near-empty page counts.
+  return page.wordCount < 60 && CHALLENGE_PATTERN.test(`${page.headings.join("\n")}\n${page.text}`);
 }
 
 export type ContentAssessment =

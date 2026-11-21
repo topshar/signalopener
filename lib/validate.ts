@@ -12,7 +12,7 @@ export type ValidationResult = {
   checks: ValidationCheck[];
   /** Hard failures, phrased as feedback for the retry prompt. Empty = accepted. */
   failures: string[];
-  evidence: Evidence;
+  evidence: Omit<Evidence, "sourceKind">;
 };
 
 const MIN_QUOTE_WORDS = 4;
@@ -32,6 +32,17 @@ export const GENERIC_PHRASES: { pattern: RegExp; label: string }[] = [
   { pattern: /\btouch base\b/i, label: "touch base" },
   { pattern: /\bin today's (?:fast-paced|competitive|digital)\b/i, label: "in today's fast-paced..." },
   { pattern: /\bsynergy\b/i, label: "synergy" },
+  // Filler that fits any company; line 2 should name a concrete consequence.
+  { pattern: /\bkeeps? (you|your team|you all|the team) (busy|on your toes)\b/i, label: "keeps your team busy" },
+  { pattern: /\bmust (be|keep you) (exciting|busy|a lot of work)\b/i, label: "must be exciting/busy" },
+  { pattern: /\bexciting (time|times|journey)\b/i, label: "exciting times" },
+  { pattern: /\b(that's|that is|very|really|so) impressive\b/i, label: "impressive" },
+  { pattern: /\bshows? (you're|you are|that you're) growing\b/i, label: "shows you're growing" },
+  // Meeting asks: line 3 should be a question about them, not a calendar request.
+  { pattern: /\b(quick|brief|short) (chat|call)\b/i, label: "quick chat/call" },
+  { pattern: /\b(hop|jump) on a call\b/i, label: "hop on a call" },
+  { pattern: /\bbook (a|some) (time|call|meeting|demo)\b/i, label: "book a meeting" },
+  { pattern: /\b15[- ]minutes?\b/i, label: "15 minutes" },
 ];
 
 const STOPWORDS = new Set(
@@ -241,7 +252,10 @@ export function validateOutput(
       id: "injection",
       label: "Website text treated as data only",
       status: "warn",
-      detail: `The site contains ${signals.length} instruction-like passage${signals.length > 1 ? "s" : ""} aimed at AI tools. They were ignored.`,
+      detail:
+        signals.length === 1
+          ? "The site contains 1 passage that reads like an instruction to AI tools. It was not used as evidence."
+          : `The site contains ${signals.length} passages that read like instructions to AI tools. They were not used as evidence.`,
     });
   } else {
     checks.push({ id: "injection", label: "Website text treated as data only", status: "pass" });

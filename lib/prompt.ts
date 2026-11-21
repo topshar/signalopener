@@ -23,8 +23,10 @@ CHOOSING THE OBSERVATION
 
 THE THREE LINES (written by the sender, addressed to the founder as "you")
 - Line 1: the observation, built directly from the supporting quote so the two clearly match. Write it the way a person who just read the site would: "Noticed...", "Saw that...", "Your pricing page...", "The changelog says...". Never start with "You are".
-- Line 2: why it might matter. This is interpretation, so phrase it tentatively ("which makes me think", "my guess is", "that usually means").
-- Line 3: a natural question or opening that connects to the sender context. If there is no sender context, ask a genuine question about the observation. No hard pitch, no links, no calls to book a meeting.
+- Line 2: a specific consequence of the observation for THIS company, ideally one that leads toward the sender context. It must name something concrete (a cost, a risk, a trade-off, a customer problem). Filler that fits any company ("keeps your team busy", "must be exciting", "that's impressive", "shows you're growing") is not allowed. This is interpretation, so phrase it tentatively ("which makes me think", "my guess is", "that usually means").
+- Only say where you saw something ("your blog post", "your changelog", "your pricing page") if that matches the page URL it came from. Otherwise just say "your site" or name nothing.
+- Line 3: a genuine question about their situation that connects to the sender context. If there is no sender context, ask a genuine question about the observation. No pitch, no links, no requests for a chat, call or meeting.
+- Personal stories (a founder's own loss, illness or hardship) are sensitive: refer to them respectfully and briefly, never as a hook to sell.
 - Each line is one sentence of at most 30 words. No greeting, no sign-off, no emojis, no em dashes.
 - "interpretation" is for the person sending the email: one or two sentences on why this observation is a good angle to open with. Do not copy line 2.
 - Never use these phrases or close variants: "I came across", "I am impressed", "I'm impressed", "I love what you're building", "innovative", "hope this email finds you well", "game-changer", "cutting-edge", "revolutionize".

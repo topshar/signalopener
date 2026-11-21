@@ -13,7 +13,7 @@ export function getProvider(): AIProvider {
 
   if (provider === "gemini") {
     const key = process.env.GEMINI_API_KEY?.trim();
-    const model = process.env.GEMINI_MODEL?.trim() || "gemini-3.5-flash";
+    const model = process.env.GEMINI_MODEL?.trim() || "gemini-3.5-flash-lite";
     // Unset -> "low". Set to an empty string to send no thinking config.
     const thinking = process.env.GEMINI_THINKING_LEVEL ?? "low";
     if (!key) throw configError("GEMINI_API_KEY is not set.");

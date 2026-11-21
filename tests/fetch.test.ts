@@ -94,72 +94,78 @@ async function code(p: Promise<unknown>): Promise<string> {
   }
 }
 
-describe("safeFetchHtml against a local server", () => {
-  it("server is listening on port 80", (t) => {
-    if (!listening) t.skip("port 80 unavailable");
-    assert.ok(listening);
+// Skip (rather than fail) every test if port 80 was taken or needs admin rights.
+const itl = (name: string, fn: () => Promise<void>) =>
+  it(name, async (t) => {
+    if (!listening) {
+      t.skip("port 80 unavailable on this machine");
+      return;
+    }
+    await fn();
   });
 
-  it("fetches HTML", async () => {
+describe("safeFetchHtml against a local server", () => {
+
+  itl("fetches HTML", async () => {
     const r = await get("/ok");
     assert.match(r.html, /Hello from the test server/);
     assert.equal(r.truncated, false);
   });
 
-  it("decompresses gzip", async () => {
+  itl("decompresses gzip", async () => {
     assert.match((await get("/gzip")).html, /Hello from the test server/);
   });
 
-  it("follows a redirect and re-resolves the new host", async () => {
+  itl("follows a redirect and re-resolves the new host", async () => {
     resolved.length = 0;
     const r = await get("/redirect");
     assert.equal(r.finalUrl, "http://other.test/ok");
     assert.deepEqual(resolved, ["site.test", "other.test"]);
   });
 
-  it("blocks a redirect to a host that resolves privately", async () => {
+  itl("blocks a redirect to a host that resolves privately", async () => {
     assert.equal(await code(get("/redirect-private")), "BLOCKED_HOST");
   });
 
-  it("blocks a redirect to a private IP literal", async () => {
+  itl("blocks a redirect to a private IP literal", async () => {
     assert.equal(await code(get("/redirect-ip")), "BLOCKED_HOST");
   });
 
-  it("blocks a redirect to a non-standard port", async () => {
+  itl("blocks a redirect to a non-standard port", async () => {
     assert.equal(await code(get("/redirect-port")), "BLOCKED_HOST");
   });
 
-  it("stops redirect loops", async () => {
+  itl("stops redirect loops", async () => {
     assert.equal(await code(get("/loop")), "TOO_MANY_REDIRECTS");
   });
 
-  it("rejects non-HTML", async () => {
+  itl("rejects non-HTML", async () => {
     assert.equal(await code(get("/json")), "NOT_HTML");
   });
 
-  it("reports HTTP errors", async () => {
+  itl("reports HTTP errors", async () => {
     assert.equal(await code(get("/missing")), "HTTP_ERROR");
   });
 
-  it("truncates large pages at maxBytes", async () => {
+  itl("truncates large pages at maxBytes", async () => {
     const r = await get("/big", "site.test", { maxBytes: 100_000 });
     assert.equal(r.truncated, true);
     assert.equal(r.html.length, 100_000);
   });
 
-  it("caps decompressed size (compression bomb)", async () => {
+  itl("caps decompressed size (compression bomb)", async () => {
     const r = await get("/bomb", "site.test", { maxBytes: 200_000 });
     assert.equal(r.truncated, true);
     assert.equal(r.html.length, 200_000);
   });
 
-  it("times out on a silent server", async () => {
+  itl("times out on a silent server", async () => {
     const started = Date.now();
     assert.equal(await code(get("/slow", "site.test", { timeoutMs: 500 })), "TIMEOUT");
     assert.ok(Date.now() - started < 2000);
   });
 
-  it("reports unknown domains as DNS_FAILED", async () => {
+  itl("reports unknown domains as DNS_FAILED", async () => {
     assert.equal(await code(get("/ok", "nowhere.test")), "DNS_FAILED");
   });
 });
