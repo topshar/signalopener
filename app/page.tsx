@@ -1,67 +1,124 @@
-import Image from "next/image";
+"use client";
+
+import { useState, type FormEvent } from "react";
+import { LoadingSteps } from "@/components/LoadingSteps";
+import { ErrorNotice, InsufficientNotice } from "@/components/Notice";
+import { ResultView } from "@/components/ResultView";
+import type { GenerateResponse } from "@/lib/types";
+
+const MAX_SENDER_CONTEXT = 300;
 
 export default function Home() {
+  const [url, setUrl] = useState("");
+  const [senderContext, setSenderContext] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<GenerateResponse | null>(null);
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!url.trim() || loading) return;
+
+    setLoading(true);
+    setResult(null);
+    try {
+      const res = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url: url.trim(), senderContext: senderContext.trim() }),
+      });
+      const data = (await res.json()) as GenerateResponse;
+      setResult(data);
+    } catch {
+      setResult({
+        status: "error",
+        code: "NETWORK",
+        message: "Couldn't reach SignalOpener's server. Check your connection and try again.",
+      });
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
+    <div className="flex min-h-screen flex-col">
+      <header className="mx-auto flex w-full max-w-[720px] items-center px-5 pt-6 sm:px-6">
+        <span className="flex items-center gap-2 text-[15px] font-semibold tracking-tight">
+          <span className="h-2.5 w-2.5 rounded-sm bg-accent" aria-hidden />
+          SignalOpener
+        </span>
+      </header>
+
+      <main className="mx-auto w-full max-w-[720px] flex-1 px-5 pb-20 pt-12 sm:px-6 sm:pt-16">
+        <h1 className="text-[30px] font-semibold leading-[1.15] tracking-tight sm:text-[38px]">
+          Founder openers built from what their website actually says.
+        </h1>
+        <p className="mt-4 max-w-[560px] text-[16px] leading-relaxed text-ink-soft">
+          Paste a company&apos;s website. SignalOpener reads it, picks one specific observation and
+          drafts a three-line cold email opener, with the source so you can check it.
+        </p>
+
+        <form
+          onSubmit={onSubmit}
+          className="mt-10 space-y-5 rounded-xl border border-line bg-surface p-5 sm:p-6"
+        >
+          <div>
+            <label htmlFor="url" className="text-[14px] font-medium text-ink">
+              Company website
+            </label>
+            <input
+              id="url"
+              name="url"
+              type="text"
+              inputMode="url"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="acme.com"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              required
+              maxLength={2048}
+              className="mt-2 h-11 w-full rounded-lg border border-line-strong bg-surface px-3.5 text-[15px] text-ink placeholder:text-muted/70 focus:border-accent focus:outline-none focus:ring-3 focus:ring-accent/15"
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+          </div>
+
+          <div>
+            <div className="flex items-baseline justify-between">
+              <label htmlFor="sender" className="text-[14px] font-medium text-ink">
+                What are you reaching out about?{" "}
+                <span className="font-normal text-muted">Optional</span>
+              </label>
+              <span className="text-[12px] tabular-nums text-muted">
+                {senderContext.length}/{MAX_SENDER_CONTEXT}
+              </span>
+            </div>
+            <textarea
+              id="sender"
+              name="sender"
+              rows={3}
+              placeholder="I help SaaS companies improve customer onboarding with AI automation."
+              value={senderContext}
+              onChange={(e) => setSenderContext(e.target.value.slice(0, MAX_SENDER_CONTEXT))}
+              className="mt-2 w-full resize-none rounded-lg border border-line-strong bg-surface px-3.5 py-2.5 text-[15px] leading-relaxed text-ink placeholder:text-muted/70 focus:border-accent focus:outline-none focus:ring-3 focus:ring-accent/15"
+            />
+            <p className="mt-1.5 text-[13px] text-muted">
+              Shapes the last line so it connects to why you&apos;re writing.
+            </p>
+          </div>
+
+          <button
+            type="submit"
+            disabled={loading || !url.trim()}
+            className="inline-flex h-11 w-full items-center justify-center rounded-lg bg-ink px-5 text-[15px] font-medium text-white transition-colors hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:w-auto"
           >
-            Documentation
-          </a>
+            {loading ? "Researching…" : "Generate opener"}
+          </button>
+        </form>
+
+        <div className="mt-10" aria-live="polite">
+          {loading && <LoadingSteps />}
+          {!loading && result?.status === "ok" && <ResultView result={result} />}
+          {!loading && result?.status === "insufficient" && <InsufficientNotice result={result} />}
+          {!loading && result?.status === "error" && <ErrorNotice error={result} />}
         </div>
       </main>
     </div>

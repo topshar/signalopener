@@ -1,36 +1,51 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# SignalOpener
 
-## Getting Started
+Paste a company's website and get a three-line cold email opener for its founder, grounded in what the site actually says. Each opener comes with the quote and source page it's based on.
 
-First, run the development server:
+**Status: Stage 1 (basic end-to-end).** Homepage only. Quotes are shown but not yet verified against the page; that arrives in Stage 2.
+
+## Run locally
+
+Requires Node 20+.
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+cp .env.example .env.local   # then add your GEMINI_API_KEY
+npm run dev                  # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Get a free Gemini key at https://aistudio.google.com/apikey.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Environment variables
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Variable | Required | Notes |
+|---|---|---|
+| `AI_PROVIDER` | no | `gemini` (default) or `openrouter`. No automatic fallback. |
+| `GEMINI_API_KEY` | for Gemini | Server-side only. |
+| `GEMINI_MODEL` | no | Defaults to `gemini-3.5-flash` (free tier at time of writing). |
+| `OPENROUTER_API_KEY` | for OpenRouter | Server-side only. |
+| `OPENROUTER_MODEL` | for OpenRouter | Pick a current `:free` model; availability changes often. |
 
-## Learn More
+## Scripts
 
-To learn more about Next.js, take a look at the following resources:
+- `npm run dev`: development server
+- `npm run build && npm start`: production build
+- `npm test`: offline tests (URL guard, IP blocklist, extraction, output parsing). No network or API key needed.
+- `npm run lint`
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## How it works
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```
+POST /api/generate { url, senderContext? }
+  lib/url.ts          validate and normalise the URL
+  lib/ai/index.ts     load provider config (fails fast if the key is missing)
+  lib/safe-fetch.ts   fetch homepage: DNS + private-IP check, manual redirects (max 3,
+                      each re-checked), 8s timeout, 2MB cap, HTML only
+  lib/extract.ts      Cheerio: title, meta, JSON-LD, headings, cleaned body text
+                      -> too little text? return "insufficient" without calling the model
+  lib/prompt.ts       system rules + page content wrapped as untrusted data
+  lib/ai/*.ts         one model call, JSON output
+  lib/parse.ts        validate JSON in code, enforce exactly 3 non-empty lines
+```
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Everything except the model call is deterministic code.
